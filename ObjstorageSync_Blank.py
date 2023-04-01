@@ -54,8 +54,14 @@ def download_file(remote_path, local_path, remote_creation_time, remote_modifica
 # 检查并同步本地文件夹与远程文件夹
 def sync_directories(local_directory, remote_directory):
     # 获取远程文件夹中的文件列表
-    remote_objects = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix=REMOTE_FOLDER)
-    remote_files = {obj['Key'].replace(REMOTE_FOLDER + '/', ''): obj['LastModified'] for obj in remote_objects.get('Contents', [])}
+    remote_files = {}
+    paginator = s3.get_paginator('list_objects_v2')
+    pages = paginator.paginate(Bucket=BUCKET_NAME, Prefix=REMOTE_FOLDER)
+
+    for page in pages:
+        for obj in page.get('Contents', []):
+            if obj['Key'] != REMOTE_FOLDER + '/':
+                remote_files[obj['Key'].replace(REMOTE_FOLDER + '/', '')] = obj['LastModified']
 
     local_files = set()
 
@@ -68,13 +74,18 @@ def sync_directories(local_directory, remote_directory):
 
             local_files.add(remote_path)
 
-            # 如果本地文件在远程文件夹中不存在，或者文件的最后修改时间不同，则上传文件
+            # 如果本地文件在远程文件夹中不存在，则上传文件
             if remote_path not in remote_files:
                 print(f"{local_path} not found in remote storage. Uploading...")
                 upload_file(local_path, remote_path)
-            elif local_mtime > remote_files[remote_path]:
-                print(f"File {local_path} modified: local = {local_mtime}, remote = {remote_files[remote_path]}. Uploading...")
-                upload_file(local_path, remote_path)
+            else:
+                remote_mtime = remote_files[remote_path]
+                # 将本地和远程的修改时间转换为相同的时区，以便进行比较
+                local_mtime = local_mtime.astimezone(remote_mtime.tzinfo)
+                # 如果本地文件的修改时间大于远程文件的修改时间，则上传文件
+                if local_mtime > remote_mtime:
+                    print(f"File {local_path} modified: local = {local_mtime}, remote = {remote_mtime}. Uploading...")
+                    upload_file(local_path, remote_path)
 
     # 检查云端文件是否在本地存在
     # 检查云端文件是否在本地存在
